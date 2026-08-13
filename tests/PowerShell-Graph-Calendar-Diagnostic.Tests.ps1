@@ -3,7 +3,7 @@
 BeforeAll {
     . (Join-Path $PSScriptRoot '..' 'PowerShell-Graph-Calendar-Diagnostic.ps1')
 
-    function New-TestEvent {
+    function Get-TestEvent {
         param(
             [string] $Subject = 'Test',
             [string] $ICalUId = 'uid-1',
@@ -43,35 +43,35 @@ BeforeAll {
 
 Describe 'Test-EventNoEndDate' {
     It 'reports a recurring series without an end date' {
-        Test-EventNoEndDate -CalendarEvent (New-TestEvent -RangeType 'noEnd') | Should -BeTrue
+        Test-EventNoEndDate -CalendarEvent (Get-TestEvent -RangeType 'noEnd') | Should -BeTrue
     }
 
     It 'does not report a series with an end date' {
-        Test-EventNoEndDate -CalendarEvent (New-TestEvent -RangeType 'endDate') | Should -BeFalse
+        Test-EventNoEndDate -CalendarEvent (Get-TestEvent -RangeType 'endDate') | Should -BeFalse
     }
 
     It 'does not report a single instance meeting' {
-        Test-EventNoEndDate -CalendarEvent (New-TestEvent) | Should -BeFalse
+        Test-EventNoEndDate -CalendarEvent (Get-TestEvent) | Should -BeFalse
     }
 }
 
 Describe 'Test-EventTooLong' {
     It 'reports a meeting longer than a year' {
-        $longEvent = New-TestEvent -Start ([datetime]'2024-01-01T09:00:00Z') -End ([datetime]'2025-06-01T09:00:00Z')
+        $longEvent = Get-TestEvent -Start ([datetime]'2024-01-01T09:00:00Z') -End ([datetime]'2025-06-01T09:00:00Z')
         Test-EventTooLong -CalendarEvent $longEvent -LongMeetingDays 365 | Should -BeTrue
     }
 
     It 'does not report a one hour meeting' {
-        Test-EventTooLong -CalendarEvent (New-TestEvent) -LongMeetingDays 365 | Should -BeFalse
+        Test-EventTooLong -CalendarEvent (Get-TestEvent) -LongMeetingDays 365 | Should -BeFalse
     }
 }
 
 Describe 'Get-DuplicateICalUid' {
     It 'groups events that share an iCalUId' {
         $events = @(
-            (New-TestEvent -ICalUId 'dup'),
-            (New-TestEvent -ICalUId 'dup'),
-            (New-TestEvent -ICalUId 'unique')
+            (Get-TestEvent -ICalUId 'dup'),
+            (Get-TestEvent -ICalUId 'dup'),
+            (Get-TestEvent -ICalUId 'unique')
         )
 
         $groups = @(Get-DuplicateICalUid -Events $events)
@@ -81,23 +81,23 @@ Describe 'Get-DuplicateICalUid' {
     }
 
     It 'returns nothing when every iCalUId is unique' {
-        @(Get-DuplicateICalUid -Events @((New-TestEvent -ICalUId 'a'), (New-TestEvent -ICalUId 'b'))).Count | Should -Be 0
+        @(Get-DuplicateICalUid -Events @((Get-TestEvent -ICalUId 'a'), (Get-TestEvent -ICalUId 'b'))).Count | Should -Be 0
     }
 }
 
 Describe 'Test-EventInRange' {
     It 'keeps an event inside the range' {
-        Test-EventInRange -CalendarEvent (New-TestEvent) -StartDate ([datetime]'2023-01-01Z') -EndDate ([datetime]'2025-01-01Z') |
+        Test-EventInRange -CalendarEvent (Get-TestEvent) -StartDate ([datetime]'2023-01-01Z') -EndDate ([datetime]'2025-01-01Z') |
             Should -BeTrue
     }
 
     It 'drops an event outside the range' {
-        Test-EventInRange -CalendarEvent (New-TestEvent) -StartDate ([datetime]'2020-01-01Z') -EndDate ([datetime]'2021-01-01Z') |
+        Test-EventInRange -CalendarEvent (Get-TestEvent) -StartDate ([datetime]'2020-01-01Z') -EndDate ([datetime]'2021-01-01Z') |
             Should -BeFalse
     }
 
     It 'keeps a never ending series that started before the range' {
-        $seriesEvent = New-TestEvent -RangeType 'noEnd' -RangeStartDate '2010-01-01'
+        $seriesEvent = Get-TestEvent -RangeType 'noEnd' -RangeStartDate '2010-01-01'
         Test-EventInRange -CalendarEvent $seriesEvent -StartDate ([datetime]'2024-01-01Z') -EndDate ([datetime]'2025-01-01Z') |
             Should -BeTrue
     }
@@ -108,11 +108,11 @@ Describe 'Invoke-CalendarDiagnostic' {
         Mock Get-ModifiedOccurrenceCount { 25 }
 
         $script:events = @(
-            (New-TestEvent -Subject 'Never ending' -ICalUId 'a' -RangeType 'noEnd'),
-            (New-TestEvent -Subject 'Very long' -ICalUId 'b' -Start ([datetime]'2024-01-01T09:00:00Z') -End ([datetime]'2025-06-01T09:00:00Z')),
-            (New-TestEvent -Subject 'Duplicate 1' -ICalUId 'dup'),
-            (New-TestEvent -Subject 'Duplicate 2' -ICalUId 'dup'),
-            (New-TestEvent -Subject 'Healthy' -ICalUId 'c')
+            (Get-TestEvent -Subject 'Never ending' -ICalUId 'a' -RangeType 'noEnd'),
+            (Get-TestEvent -Subject 'Very long' -ICalUId 'b' -Start ([datetime]'2024-01-01T09:00:00Z') -End ([datetime]'2025-06-01T09:00:00Z')),
+            (Get-TestEvent -Subject 'Duplicate 1' -ICalUId 'dup'),
+            (Get-TestEvent -Subject 'Duplicate 2' -ICalUId 'dup'),
+            (Get-TestEvent -Subject 'Healthy' -ICalUId 'c')
         )
 
         $script:result = Invoke-CalendarDiagnostic -Mailbox 'user@contoso.com' -Events $script:events `
@@ -136,8 +136,28 @@ Describe 'Invoke-CalendarDiagnostic' {
             $files.Count | Should -Be 6
             foreach ($file in $files) { Test-Path -LiteralPath $file | Should -BeTrue }
             @(Get-ChildItem -Path $outputPath -Filter '*.csv').Count | Should -Be 5
+            @(Import-Csv -LiteralPath ($files | Where-Object { $_ -like '*DuplicateICalUIDs.csv' })).Count |
+                Should -Be 2
             (Get-Content -LiteralPath ($files | Where-Object { $_ -like '*Summary.txt' }) -Raw) |
                 Should -Match 'Meetings with no ending date'
+        }
+        finally {
+            Remove-Item -LiteralPath $outputPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'writes header only .csv files when a check finds nothing' {
+        $outputPath = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
+
+        try {
+            $empty = Invoke-CalendarDiagnostic -Mailbox 'user@contoso.com' -Events @() `
+                -StartDate ([datetime]'2023-01-01Z') -EndDate ([datetime]'2026-01-01Z')
+            $files = @(Write-DiagnosticReport -Result $empty -OutputPath $outputPath)
+
+            foreach ($file in ($files | Where-Object { $_ -like '*.csv' })) {
+                @(Import-Csv -LiteralPath $file).Count | Should -Be 0
+                (Get-Content -LiteralPath $file -Raw) | Should -Match 'ICalUId'
+            }
         }
         finally {
             Remove-Item -LiteralPath $outputPath -Recurse -Force -ErrorAction SilentlyContinue

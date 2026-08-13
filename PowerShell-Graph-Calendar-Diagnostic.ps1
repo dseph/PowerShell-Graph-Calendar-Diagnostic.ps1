@@ -480,6 +480,45 @@ function Get-ModifiedOccurrenceCount {
 
 #region Reporting
 
+function Get-DiagnosticRecordHeader {
+    <#
+    .SYNOPSIS
+        Returns the .csv header line used by the reports.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $template = ConvertTo-DiagnosticRecord -CalendarEvent ([pscustomobject] @{})
+
+    return (($template.PSObject.Properties.Name | ForEach-Object { '"{0}"' -f $_ }) -join ',')
+}
+
+function Format-DiagnosticCount {
+    <#
+    .SYNOPSIS
+        Returns the aligned "check : count" lines of the summary.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable] $Result
+    )
+
+    $counters = [ordered] @{
+        'Events examined'                                                              = $Result.TotalEvents
+        'Meetings with no ending date'                                                 = @($Result.NoEndDate).Count
+        "Meetings longer than $($Result.LongMeetingDays) days"                         = @($Result.LongMeetings).Count
+        "Series with more than $($Result.MaxModifiedOccurrences) modified occurrences" = @($Result.ModifiedOccurrences).Count
+        'Events with a duplicate iCalUId'                                              = @($Result.DuplicateICalUIDs).Count
+    }
+
+    $width = ($counters.Keys | Measure-Object -Property Length -Maximum).Maximum
+
+    return @(foreach ($key in $counters.Keys) { '{0} : {1}' -f $key.PadRight($width), $counters[$key] })
+}
+
 function Write-DiagnosticReport {
     <#
     .SYNOPSIS
@@ -520,8 +559,8 @@ function Write-DiagnosticReport {
 
         if ($PSCmdlet.ShouldProcess($path, 'Write report')) {
             if ($records.Count -eq 0) {
-                # Keep an empty file so that every check has a matching report.
-                Set-Content -LiteralPath $path -Value 'No records found.' -Encoding UTF8
+                # Keep a header only .csv so that every check has a matching, importable report.
+                Set-Content -LiteralPath $path -Value (Get-DiagnosticRecordHeader) -Encoding UTF8
             }
             else {
                 $records | Export-Csv -LiteralPath $path -NoTypeInformation -Encoding UTF8
@@ -533,16 +572,7 @@ function Write-DiagnosticReport {
 
     $summaryPath = "$prefix-Summary.txt"
 
-    $counters = [ordered] @{
-        'Events examined'                                                              = $Result.TotalEvents
-        'Meetings with no ending date'                                                 = @($Result.NoEndDate).Count
-        "Meetings longer than $($Result.LongMeetingDays) days"                         = @($Result.LongMeetings).Count
-        "Series with more than $($Result.MaxModifiedOccurrences) modified occurrences" = @($Result.ModifiedOccurrences).Count
-        'Events with a duplicate iCalUId'                                              = @($Result.DuplicateICalUIDs).Count
-    }
-
-    $width = ($counters.Keys | Measure-Object -Property Length -Maximum).Maximum
-    $counts = foreach ($key in $counters.Keys) { '{0} : {1}' -f $key.PadRight($width), $counters[$key] }
+    $counts = Format-DiagnosticCount -Result $Result
     $summary = @(
         'Calendar Diagnostic Summary'
         '==========================='
@@ -668,11 +698,10 @@ function Invoke-CalendarDiagnosticReport {
 
     $files = Write-DiagnosticReport -Result $result -OutputPath $OutputPath
 
-    Write-Information "Events examined                                 : $($result.TotalEvents)" -InformationAction Continue
-    Write-Information "Meetings with no ending date                    : $(@($result.NoEndDate).Count)" -InformationAction Continue
-    Write-Information "Meetings longer than $LongMeetingDays days                      : $(@($result.LongMeetings).Count)" -InformationAction Continue
-    Write-Information "Series with more than $MaxModifiedOccurrences modified occurrences   : $(@($result.ModifiedOccurrences).Count)" -InformationAction Continue
-    Write-Information "Events with a duplicate iCalUId                 : $(@($result.DuplicateICalUIDs).Count)" -InformationAction Continue
+    foreach ($line in (Format-DiagnosticCount -Result $result)) {
+        Write-Information $line -InformationAction Continue
+    }
+
     Write-Information '' -InformationAction Continue
     Write-Information 'Report files:' -InformationAction Continue
     foreach ($file in $files) { Write-Information "  $file" -InformationAction Continue }
