@@ -1,4 +1,4 @@
-# c
+# Python-Graph-Calendar-Diagnostic.ps1
 
 <#
 .SYNOPSIS
@@ -156,20 +156,20 @@ function Get-MasterRangeDate {
 	)
 
 	if ($Master.recurrence -and $Master.recurrence.range) {
-		if ($Boundary -eq 'Start') {
-			return [string]$Master.recurrence.range.startDate
-		}
-		$rangeEndDate = [datetime]::MinValue
-		if (-not [datetime]::TryParse([string]$Master.recurrence.range.endDate, [ref]$rangeEndDate) -or $rangeEndDate -eq [datetime]::MinValue) {
+		$rangeDateText = if ($Boundary -eq 'Start') { [string]$Master.recurrence.range.startDate } else { [string]$Master.recurrence.range.endDate }
+		$rangeDate = [datetime]::MinValue
+		if (-not [datetime]::TryParse($rangeDateText, [ref]$rangeDate) -or $rangeDate -eq [datetime]::MinValue) {
 			return ''
 		}
-		return [string]$Master.recurrence.range.endDate
+		return $rangeDate.ToString('MM/dd/yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
 	}
 
-	if ($Boundary -eq 'Start') {
-		return [string]$Master.start.dateTime
+	$eventDateText = if ($Boundary -eq 'Start') { [string]$Master.start.dateTime } else { [string]$Master.end.dateTime }
+	$eventDate = [datetime]::MinValue
+	if (-not [datetime]::TryParse($eventDateText, [ref]$eventDate)) {
+		return ''
 	}
-	return [string]$Master.end.dateTime
+	return $eventDate.ToString('MM/dd/yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
 }
 
 function Test-RecurrenceLongerThanOneYear {
@@ -371,9 +371,13 @@ $duplicateIcalUidGroups = @(
 		Where-Object { $_.Count -gt 1 }
 )
 $duplicateIcalUidMasterCounts = @{}
+$duplicateIcalUidPeersByMasterId = @{}
 foreach ($duplicateGroup in $duplicateIcalUidGroups) {
 	foreach ($stats in $duplicateGroup.Group) {
 		$duplicateIcalUidMasterCounts[$stats.GraphId] = $duplicateGroup.Count
+		$duplicateIcalUidPeersByMasterId[$stats.GraphId] = @(
+			$duplicateGroup.Group | Where-Object { $_.GraphId -ne $stats.GraphId }
+		)
 	}
 }
 $totalMasterRecords = $masterStats.Count
@@ -399,9 +403,9 @@ $withoutEndDateMasterStats = @(
 	$recurringMasterStats | Where-Object { Test-RecurrenceHasNoEndDate -Master $_.MasterObject }
 )
 $longMeetingReportMasterStats = @(
-	$recurringMasterStats | Where-Object {
-		Test-RecurrenceLongerThanOneYear -Master $_.MasterObject -or
-		Test-RecurrenceHasNoEndDate -Master $_.MasterObject
+	$masterStats | Where-Object {
+		(Test-MeetingMasterLongerThanOneYear -Master $_.MasterObject) -or
+		(Test-RecurrenceHasNoEndDate -Master $_.MasterObject)
 	}
 )
 $reportLines = New-Object System.Collections.Generic.List[string]
@@ -456,6 +460,10 @@ else {
 		}
 		if ($duplicateIcalUidMasterCounts.ContainsKey($stats.GraphId)) {
 			Add-ReportLine -ReportLines $reportLines -Text ('*** Warning: Duplicate iCalUID shared by {0} master records. ***' -f $duplicateIcalUidMasterCounts[$stats.GraphId])
+			foreach ($duplicatePeer in $duplicateIcalUidPeersByMasterId[$stats.GraphId]) {
+				Add-ReportLine -ReportLines $reportLines -Text ('    Duplicate Graph ID: {0}' -f $duplicatePeer.GraphId)
+				Add-ReportLine -ReportLines $reportLines -Text ('    Duplicate Subject: {0}' -f $duplicatePeer.Subject)
+			}
 		}
 	}
 }
@@ -505,11 +513,14 @@ else {
 $duplicateIcalUidRows = @(
 	foreach ($duplicateGroup in $duplicateIcalUidGroups) {
 		foreach ($stats in $duplicateGroup.Group | Sort-Object Subject, GraphId) {
+			$duplicatePeers = @($duplicateIcalUidPeersByMasterId[$stats.GraphId])
 			[pscustomobject]@{
 				IcalUid = $duplicateGroup.Name
 				DuplicateMasterCount = $duplicateGroup.Count
 				GraphId = $stats.GraphId
 				Subject = $stats.Subject
+				DuplicateGraphIds = ($duplicatePeers.GraphId -join ' | ')
+				DuplicateSubjects = ($duplicatePeers.Subject -join ' | ')
 				MasterType = $stats.MasterKind
 				MasterFirstEventStart = $stats.Start
 				MasterFirstEventEnd = $stats.End
@@ -522,7 +533,7 @@ if ($duplicateIcalUidRows.Count -gt 0) {
 	$duplicateIcalUidRows | Export-Csv -LiteralPath $DuplicateIcalUidCsvPath -NoTypeInformation -Encoding UTF8
 }
 else {
-	'IcalUid,DuplicateMasterCount,GraphId,Subject,MasterType,MasterFirstEventStart,MasterFirstEventEnd' |
+	'IcalUid,DuplicateMasterCount,GraphId,Subject,DuplicateGraphIds,DuplicateSubjects,MasterType,MasterFirstEventStart,MasterFirstEventEnd' |
 		Set-Content -LiteralPath $DuplicateIcalUidCsvPath -Encoding UTF8
 }
 
